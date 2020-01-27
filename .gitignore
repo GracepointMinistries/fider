@@ -6,6 +6,8 @@ node_modules/
 .vscode/
 .idea/
 logs/
+cmd/membership_sync/membership_sync
+*~
 
 fider
 fider.exe
