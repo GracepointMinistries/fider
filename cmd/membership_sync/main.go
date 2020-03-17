@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -13,20 +14,48 @@ import (
 	"github.com/GracepointMinistries/membership/pkg/membership"
 )
 
-func getMembership(m map[string]string) error {
-	people, err := membershipClient.GetPeopleAttributes(context.Background(), []string{"gpmail", "name"}, map[string][]string{"composite_ministry": []string{"berk_college"}})
+func getMembership(m map[string]string, criteriaStr string) error {
+	criteriaMap := make(map[string][]string)
+	splitCriteria := strings.Split(criteriaStr, ",")
+	for _, pair := range splitCriteria {
+		splitPair := strings.Split(pair, "=")
+		if len(splitPair) != 2 {
+			log.Printf("cannot split criteria pair %s", pair)
+			continue
+		}
+		criteriaMap[splitPair[0]] = append(criteriaMap[splitPair[0]], splitPair[1])
+	}
+
+	people, err := membershipClient.GetPeopleAttributes(context.Background(), []string{"gpmail", "name"}, criteriaMap)
 	if err != nil {
+		var httperr membership.HTTPError
+		errors.As(err, &httperr)
+		if httperr.StatusCode == http.StatusNotFound {
+			log.Printf("found no entries given criteria")
+			return nil
+		}
 		return fmt.Errorf("unable to get membership info %v", err)
 	}
 
 	for _, v := range people {
+		if len(v.Attrs) == 0 {
+			continue
+		}
 		if v.Attrs[0].AttrName == "gpmail" {
 			email, _ := v.Attrs[0].Values[0].(string)
+			if len(v.Attrs) < 2 {
+				log.Printf("unable to get name for person with %s", email)
+				continue
+			}
 			name, _ := v.Attrs[1].Values[0].(string)
 			m[email] = name
 		} else {
-			email, _ := v.Attrs[1].Values[0].(string)
 			name, _ := v.Attrs[0].Values[0].(string)
+			if len(v.Attrs) < 2 {
+				log.Printf("unable to get email for %s", name)
+				continue
+			}
+			email, _ := v.Attrs[1].Values[0].(string)
 			m[email] = name
 		}
 	}
@@ -82,8 +111,8 @@ func main() {
 	FiderURL = os.Getenv("FIDER_URL")        //"https://convo.gracepointonline.org/api/v1/users"
 	FiderAPIKey = os.Getenv("FIDER_API_KEY") //"Bearer hdKsaFKPIwzsfjsPOm7kPMlt3Zv16UlqmOGIlvjjiRfy81NABN6rXC8OtmIcenV5"
 
-	if MembershipURL == "" || MembershipAPIKey == "" || FiderURL == "" || FiderAPIKey == "" {
-		log.Fatal("must specify MEMBERSHIP_URL, MEMBERSHIP_API_KEY, FIDER_URL and FIDER_API_KEY")
+	if MembershipURL == "" || MembershipAPIKey == "" || FiderURL == "" || FiderAPIKey == "" || len(os.Args) != 2 {
+		log.Fatal("must specify env vars: MEMBERSHIP_URL, MEMBERSHIP_API_KEY, FIDER_URL, FIDER_API_KEY and then give criteria on command line")
 	}
 
 	var err error
@@ -93,7 +122,7 @@ func main() {
 	}
 
 	membership := make(map[string]string)
-	if err := getMembership(membership); err != nil {
+	if err := getMembership(membership, os.Args[1]); err != nil {
 		log.Fatalf("membership error %v", err)
 	}
 	log.Printf("retrieved %d entries from membership", len(membership))
